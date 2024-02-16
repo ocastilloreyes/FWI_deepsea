@@ -28,6 +28,13 @@
  */
 
 #include "fwi/fwi_kernel.h"
+//CAFE
+#include <string.h>
+//CAFE
+
+#if defined(HAVE_EXTRAE)
+#include "extrae.h"
+#endif
 
 /*
  * Initializes an array of length "length" to a random number.
@@ -657,7 +664,9 @@ void write_snapshot(char *folder,
                     v_t *v,
                     const integer dimmz,
                     const integer dimmx,
-                    const integer dimmy)
+                    const integer dimmy,
+		    real **array_mallocs,
+		    int   i_mem)
 {
     PUSH_RANGE
 
@@ -693,6 +702,25 @@ void write_snapshot(char *folder,
     double tstart_inner = dtime();
 #endif
 
+    //CAFE
+    //printf("Just before array_mallocs-- in write_snapshot Fwd phase \n");
+    int wf = 0;
+    //printf(" i_mem = %d\n", i_mem);
+    //printf(" array_mallocs = %X\n", array_mallocs);
+    memcpy(*(array_mallocs+i_mem)+wf, v->tr.u, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->tr.v, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->tr.w, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->tl.u, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->tl.v, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->tl.w, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->br.u, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->br.v, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->br.w, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->bl.u, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->bl.v, cellsInVolume); wf++;
+    memcpy(*(array_mallocs+i_mem)+wf, v->bl.w, cellsInVolume);
+    //CAFE
+/*
     safe_fwrite( v->tr.u, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
     safe_fwrite( v->tr.v, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
     safe_fwrite( v->tr.w, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
@@ -708,6 +736,7 @@ void write_snapshot(char *folder,
     safe_fwrite( v->bl.u, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
     safe_fwrite( v->bl.v, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
     safe_fwrite( v->bl.w, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
+    */
 
 #if defined(LOG_IO_STATS)
     /* stop inner timer */
@@ -739,7 +768,9 @@ void read_snapshot(char *folder,
                    v_t *v,
                    const integer dimmz,
                    const integer dimmx,
-                   const integer dimmy)
+                   const integer dimmy,
+		   real **array_mallocs,
+		   int i_mem)
 {
     PUSH_RANGE
 
@@ -767,6 +798,27 @@ void read_snapshot(char *folder,
 
     const integer cellsInVolume  = dimmz * dimmx * dimmy;
 
+    /*CAFE*/
+    //printf("Just before array_mallocs-- in read_snapshot Bwd phase \n");
+    int wf = 0;
+    //printf("Just before memcpy in read_snapshot Bwd phase \n");
+    //printf(" i_mem = %d\n", i_mem);
+    //printf(" array_mallocs = %X\n", array_mallocs);
+    memcpy(v->tr.u, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->tr.v, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->tr.w, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->tl.u, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->tl.v, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->tl.w, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->br.u, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->br.v, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->br.w, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->bl.u, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->bl.v, *(array_mallocs+i_mem)+wf, cellsInVolume); wf++;
+    memcpy(v->bl.w, *(array_mallocs+i_mem)+wf, cellsInVolume);
+    //printf("Just after memcpy in read_snapshot Bwd phase \n");
+    //CAFE 
+    /*
     safe_fread( v->tr.u, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
     safe_fread( v->tr.v, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
     safe_fread( v->tr.w, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
@@ -782,6 +834,7 @@ void read_snapshot(char *folder,
     safe_fread( v->bl.u, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
     safe_fread( v->bl.v, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
     safe_fread( v->bl.w, sizeof(real), cellsInVolume, snapshot, __FILE__, __LINE__ );
+    */
 
 #if defined(LOG_IO_STATS)
     /* stop inner timer */
@@ -835,13 +888,18 @@ void propagate_shot(time_d        direction,
                     real          *UNUSED(dataflush),
                     integer       dimmz,
                     integer       dimmx,
-                    integer       dimmy)
+                    integer       dimmy,
+		    real **array_mallocs)
 {
     PUSH_RANGE
 
     double tglobal_start, tglobal_total = 0.0;
     double tstress_start, tstress_total = 0.0;
     double tvel_start, tvel_total = 0.0;
+
+    // CAFE
+    static int i_mem = 0;
+    // CAFE
 
     for(int t=0; t < timesteps; t++)
     {
@@ -850,7 +908,13 @@ void propagate_shot(time_d        direction,
         if( t % 10 == 0 ) print_info("Computing %d-th timestep", t);
 
         /* perform IO */
-        if ( t%stacki == 0 && direction == BACKWARD) read_snapshot(folder, ntbwd-t, &v, dimmz, dimmx, dimmy);
+        if ( t%stacki == 0 && direction == BACKWARD)
+	{	
+                // CAFE
+		i_mem--;
+                // CAFE
+		read_snapshot(folder, ntbwd-t, &v, dimmz, dimmx, dimmy, array_mallocs, i_mem);
+	}
 
         tglobal_start = dtime();
 
@@ -886,8 +950,14 @@ void propagate_shot(time_d        direction,
                             ONE_R);
 
 #if defined(USE_MPI)
+#if defined(HAVE_EXTRAE)
+        Extrae_event (1234, 1);
+#endif
         /* Boundary exchange for velocity values */
+#if defined(HAVE_EXTRAE)
         exchange_velocity_boundaries( v, dimmz * dimmx, nyf, ny0);
+        Extrae_event (1234, 0);
+#endif
 #endif
 
         /* Phase 2. Computation of the central planes. */
@@ -935,8 +1005,14 @@ void propagate_shot(time_d        direction,
                           ONE_R);
 
 #if defined(USE_MPI)
+#if defined(HAVE_EXTRAE)
+        Extrae_event (1234, 1);
+#endif
         /* Boundary exchange for stress values */
         exchange_stress_boundaries( s, dimmz * dimmx, nyf, ny0);
+#if defined(HAVE_EXTRAE)
+        Extrae_event (1234, 0);
+#endif
 #endif
 
         /* Phase 2 computation. Central planes of the domain */
@@ -952,6 +1028,9 @@ void propagate_shot(time_d        direction,
                           dimmz, dimmx,
                           TWO);
 
+#if defined(HAVE_EXTRAE)
+        Extrae_event (1234, 1);
+#endif
 #if defined(_OPENACC)
         #pragma acc wait(ONE_L, ONE_R, TWO, H2D, D2H)
 #endif
@@ -960,10 +1039,19 @@ void propagate_shot(time_d        direction,
         tglobal_total += (dtime() - tglobal_start);
 
         /* perform IO */
-        if ( t%stacki == 0 && direction == FORWARD) write_snapshot(folder, ntbwd-t, &v, dimmz, dimmx, dimmy);
+        if ( t%stacki == 0 && direction == FORWARD) 
+	{
+		write_snapshot(folder, ntbwd-t, &v, dimmz, dimmx, dimmy, array_mallocs, i_mem);
+                // CAFE
+		i_mem++;
+                // CAFE
+	}
 
 #if defined(USE_MPI)
         MPI_Barrier( MPI_COMM_WORLD );
+#endif
+#if defined(HAVE_EXTRAE)
+        Extrae_event (1234, 0);
 #endif
         POP_RANGE
     }
@@ -1016,44 +1104,98 @@ void exchange_velocity_boundaries ( v_t v,
     const integer right_recv = nyf-HALO;
     const integer right_send = nyf-2*HALO;
 
-    if ( rank != 0 )
+    MPI_Status  statuses[48];
+    MPI_Request requests[48];
+    integer      wait_total = 0;
+    MPI_Request*  wait_reqs = &requests[24];
+    MPI_Status* wait_status = &statuses[24];
+
+    real* ptr00 = &v.tl.u[left_send]; real* ptr01 = &v.tl.u[left_recv];
+    real* ptr02 = &v.tl.v[left_send]; real* ptr03 = &v.tl.v[left_recv];
+    real* ptr04 = &v.tl.w[left_send]; real* ptr05 = &v.tl.w[left_recv];
+    real* ptr06 = &v.tr.u[left_send]; real* ptr07 = &v.tr.u[left_recv];
+    real* ptr08 = &v.tr.v[left_send]; real* ptr09 = &v.tr.v[left_recv];
+    real* ptr10 = &v.tr.w[left_send]; real* ptr11 = &v.tr.w[left_recv];
+    real* ptr12 = &v.bl.u[left_send]; real* ptr13 = &v.bl.u[left_recv];
+    real* ptr14 = &v.bl.v[left_send]; real* ptr15 = &v.bl.v[left_recv];
+    real* ptr16 = &v.bl.w[left_send]; real* ptr17 = &v.bl.w[left_recv];
+    real* ptr18 = &v.br.u[left_send]; real* ptr19 = &v.br.u[left_recv];
+    real* ptr20 = &v.br.v[left_send]; real* ptr21 = &v.br.v[left_recv];
+    real* ptr22 = &v.br.w[left_send]; real* ptr23 = &v.br.w[left_recv];
+
+    real* ptr24 = &v.tl.u[right_send]; real* ptr25 = &v.tl.u[right_recv];
+    real* ptr26 = &v.tl.v[right_send]; real* ptr27 = &v.tl.v[right_recv];
+    real* ptr28 = &v.tl.w[right_send]; real* ptr29 = &v.tl.w[right_recv];
+    real* ptr30 = &v.tr.u[right_send]; real* ptr31 = &v.tr.u[right_recv];
+    real* ptr32 = &v.tr.v[right_send]; real* ptr33 = &v.tr.v[right_recv];
+    real* ptr34 = &v.tr.w[right_send]; real* ptr35 = &v.tr.w[right_recv];
+    real* ptr36 = &v.bl.u[right_send]; real* ptr37 = &v.bl.u[right_recv];
+    real* ptr38 = &v.bl.v[right_send]; real* ptr39 = &v.bl.v[right_recv];
+    real* ptr40 = &v.bl.w[right_send]; real* ptr41 = &v.bl.w[right_recv];
+    real* ptr42 = &v.br.u[right_send]; real* ptr43 = &v.br.u[right_recv];
+    real* ptr44 = &v.br.v[right_send]; real* ptr45 = &v.br.v[right_recv];
+    real* ptr46 = &v.br.w[right_send]; real* ptr47 = &v.br.w[right_recv];
+
+    #if defined(_OPENACC)
+    #pragma acc host_data use_device(ptr00,ptr01,ptr02,ptr03,ptr04,ptr05,ptr06,ptr07,ptr08,ptr09,\
+                                     ptr10,ptr11,ptr12,ptr13,ptr14,ptr15,ptr16,ptr17,ptr18,ptr19,\
+                                     ptr20,ptr21,ptr22,ptr23,ptr24,ptr25,ptr26,ptr27,ptr28,ptr29,\
+                                     ptr30,ptr31,ptr32,ptr33,ptr34,ptr35,ptr36,ptr37,ptr38,ptr39,\
+                                     ptr40,ptr41,ptr42,ptr43,ptr44,ptr45,ptr46,ptr47)
+    #pragma acc update self(ptr00[0:nelems],ptr01[0:nelems],ptr02[0:nelems],ptr03[0:nelems],ptr04[0:nelems],ptr05[0:nelems],ptr06[0:nelems],ptr07[0:nelems],ptr08[0:nelems],ptr09[0:nelems],\
+                            ptr10[0:nelems],ptr11[0:nelems],ptr12[0:nelems],ptr13[0:nelems],ptr14[0:nelems],ptr15[0:nelems],ptr16[0:nelems],ptr17[0:nelems],ptr18[0:nelems],ptr19[0:nelems],\
+                            ptr20[0:nelems],ptr21[0:nelems],ptr22[0:nelems],ptr23[0:nelems],ptr24[0:nelems],ptr25[0:nelems],ptr26[0:nelems],ptr27[0:nelems],ptr28[0:nelems],ptr29[0:nelems],\
+                            ptr30[0:nelems],ptr31[0:nelems],ptr32[0:nelems],ptr33[0:nelems],ptr34[0:nelems],ptr35[0:nelems],ptr36[0:nelems],ptr37[0:nelems],ptr38[0:nelems],ptr39[0:nelems],\
+                            ptr40[0:nelems],ptr41[0:nelems],ptr42[0:nelems],ptr43[0:nelems],ptr44[0:nelems],ptr45[0:nelems],ptr46[0:nelems],ptr47[0:nelems])
+    #endif
     {
-        // [RANK-1] <---> [RANK] communication
-        EXCHANGE( &v.tl.u[left_send], &v.tl.u[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &v.tl.v[left_send], &v.tl.v[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &v.tl.w[left_send], &v.tl.w[left_recv], rank-1, rank, nelems );
+        if ( rank != 0 )
+        {
+            // [RANK-1] <---> [RANK] communication
+            EXCHANGE( &v.tl.u[left_send], &v.tl.u[left_recv], rank-1, rank, nelems, &requests[ 0] );
+            EXCHANGE( &v.tl.v[left_send], &v.tl.v[left_recv], rank-1, rank, nelems, &requests[ 2] );
+            EXCHANGE( &v.tl.w[left_send], &v.tl.w[left_recv], rank-1, rank, nelems, &requests[ 4] );
 
-        EXCHANGE( &v.tr.u[left_send], &v.tr.u[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &v.tr.v[left_send], &v.tr.v[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &v.tr.w[left_send], &v.tr.w[left_recv], rank-1, rank, nelems );
+            EXCHANGE( &v.tr.u[left_send], &v.tr.u[left_recv], rank-1, rank, nelems, &requests[ 6] );
+            EXCHANGE( &v.tr.v[left_send], &v.tr.v[left_recv], rank-1, rank, nelems, &requests[ 8] );
+            EXCHANGE( &v.tr.w[left_send], &v.tr.w[left_recv], rank-1, rank, nelems, &requests[10] );
 
-        EXCHANGE( &v.bl.u[left_send], &v.bl.u[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &v.bl.v[left_send], &v.bl.v[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &v.bl.w[left_send], &v.bl.w[left_recv], rank-1, rank, nelems );
+            EXCHANGE( &v.bl.u[left_send], &v.bl.u[left_recv], rank-1, rank, nelems, &requests[12] );
+            EXCHANGE( &v.bl.v[left_send], &v.bl.v[left_recv], rank-1, rank, nelems, &requests[14] );
+            EXCHANGE( &v.bl.w[left_send], &v.bl.w[left_recv], rank-1, rank, nelems, &requests[16] );
 
-        EXCHANGE( &v.br.u[left_send], &v.br.u[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &v.br.v[left_send], &v.br.v[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &v.br.w[left_send], &v.br.w[left_recv], rank-1, rank, nelems );
-    }
+            EXCHANGE( &v.br.u[left_send], &v.br.u[left_recv], rank-1, rank, nelems, &requests[18] );
+            EXCHANGE( &v.br.v[left_send], &v.br.v[left_recv], rank-1, rank, nelems, &requests[20] );
+            EXCHANGE( &v.br.w[left_send], &v.br.w[left_recv], rank-1, rank, nelems, &requests[22] );
 
-    if ( rank != nranks -1 )  //task to exchange stress boundaries
-    {
-        //                [RANK] <---> [RANK+1] communication
-        EXCHANGE( &v.tl.u[right_send], &v.tl.u[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &v.tl.v[right_send], &v.tl.v[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &v.tl.w[right_send], &v.tl.w[right_recv], rank+1, rank, nelems );
+            wait_total += 24;
+            wait_reqs   = requests;
+            wait_status = statuses;
+        }
 
-        EXCHANGE( &v.tr.u[right_send], &v.tr.u[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &v.tr.v[right_send], &v.tr.v[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &v.tr.w[right_send], &v.tr.w[right_recv], rank+1, rank, nelems );
+        if ( rank != nranks -1 )  //task to exchange stress boundaries
+        {
+            //                [RANK] <---> [RANK+1] communication
+            EXCHANGE( &v.tl.u[right_send], &v.tl.u[right_recv], rank+1, rank, nelems, &requests[24] );
+            EXCHANGE( &v.tl.v[right_send], &v.tl.v[right_recv], rank+1, rank, nelems, &requests[26] );
+            EXCHANGE( &v.tl.w[right_send], &v.tl.w[right_recv], rank+1, rank, nelems, &requests[28] );
 
-        EXCHANGE( &v.bl.u[right_send], &v.bl.u[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &v.bl.v[right_send], &v.bl.v[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &v.bl.w[right_send], &v.bl.w[right_recv], rank+1, rank, nelems );
+            EXCHANGE( &v.tr.u[right_send], &v.tr.u[right_recv], rank+1, rank, nelems, &requests[30] );
+            EXCHANGE( &v.tr.v[right_send], &v.tr.v[right_recv], rank+1, rank, nelems, &requests[32] );
+            EXCHANGE( &v.tr.w[right_send], &v.tr.w[right_recv], rank+1, rank, nelems, &requests[34] );
 
-        EXCHANGE( &v.br.u[right_send], &v.br.u[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &v.br.v[right_send], &v.br.v[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &v.br.w[right_send], &v.br.w[right_recv], rank+1, rank, nelems );
+            EXCHANGE( &v.bl.u[right_send], &v.bl.u[right_recv], rank+1, rank, nelems, &requests[36] );
+            EXCHANGE( &v.bl.v[right_send], &v.bl.v[right_recv], rank+1, rank, nelems, &requests[38] );
+            EXCHANGE( &v.bl.w[right_send], &v.bl.w[right_recv], rank+1, rank, nelems, &requests[40] );
+
+            EXCHANGE( &v.br.u[right_send], &v.br.u[right_recv], rank+1, rank, nelems, &requests[42] );
+            EXCHANGE( &v.br.v[right_send], &v.br.v[right_recv], rank+1, rank, nelems, &requests[44] );
+            EXCHANGE( &v.br.w[right_send], &v.br.w[right_recv], rank+1, rank, nelems, &requests[46] );
+
+            wait_total += 24;
+        }
+
+        MPI_Waitall(wait_total, wait_reqs, wait_status );
     }
 
     POP_RANGE
@@ -1095,68 +1237,125 @@ void exchange_stress_boundaries ( s_t s,
     const integer right_recv = nyf-HALO;
     const integer right_send = nyf-2*HALO;
 
-    if ( rank != 0 )
+    MPI_Status  statuses[96];
+    MPI_Request requests[96];
+    integer      wait_total = 0;
+    MPI_Request*  wait_reqs = &requests[48];
+    MPI_Status* wait_status = &statuses[48];
+
+    real* ptr00 = &s.tl.zz[left_send]; real* ptr01 = &s.tl.zz[left_recv];
+    real* ptr02 = &s.tl.xz[left_send]; real* ptr03 = &s.tl.xz[left_recv];
+    real* ptr04 = &s.tl.yz[left_send]; real* ptr05 = &s.tl.yz[left_recv];
+    real* ptr06 = &s.tl.xx[left_send]; real* ptr07 = &s.tl.xx[left_recv];
+    real* ptr08 = &s.tl.xy[left_send]; real* ptr09 = &s.tl.xy[left_recv];
+    real* ptr10 = &s.tl.yy[left_send]; real* ptr11 = &s.tl.yy[left_recv];
+
+    real* ptr12 = &s.tr.zz[left_send]; real* ptr13 = &s.tr.zz[left_recv];
+    real* ptr14 = &s.tr.xz[left_send]; real* ptr15 = &s.tr.xz[left_recv];
+    real* ptr16 = &s.tr.yz[left_send]; real* ptr17 = &s.tr.yz[left_recv];
+    real* ptr18 = &s.tr.xx[left_send]; real* ptr19 = &s.tr.xx[left_recv];
+    real* ptr20 = &s.tr.xy[left_send]; real* ptr21 = &s.tr.xy[left_recv];
+    real* ptr22 = &s.tr.yy[left_send]; real* ptr23 = &s.tr.yy[left_recv];
+
+    real* ptr24 = &s.bl.zz[left_send]; real* ptr25 = &s.bl.zz[left_recv];
+    real* ptr26 = &s.bl.xz[left_send]; real* ptr27 = &s.bl.xz[left_recv];
+    real* ptr28 = &s.bl.yz[left_send]; real* ptr29 = &s.bl.yz[left_recv];
+    real* ptr30 = &s.bl.xx[left_send]; real* ptr31 = &s.bl.xx[left_recv];
+    real* ptr32 = &s.bl.xy[left_send]; real* ptr33 = &s.bl.xy[left_recv];
+    real* ptr34 = &s.bl.yy[left_send]; real* ptr35 = &s.bl.yy[left_recv];
+
+    real* ptr36 = &s.br.zz[left_send]; real* ptr37 = &s.br.zz[left_recv];
+    real* ptr38 = &s.br.xz[left_send]; real* ptr39 = &s.br.xz[left_recv];
+    real* ptr40 = &s.br.yz[left_send]; real* ptr41 = &s.br.yz[left_recv];
+    real* ptr42 = &s.br.xx[left_send]; real* ptr43 = &s.br.xx[left_recv];
+    real* ptr44 = &s.br.xy[left_send]; real* ptr45 = &s.br.xy[left_recv];
+    real* ptr46 = &s.br.yy[left_send]; real* ptr47 = &s.br.yy[left_recv];
+
+    #if defined(_OPENACC)
+    #pragma acc host_data use_device(ptr00,ptr01,ptr02,ptr03,ptr04,ptr05,ptr06,ptr07,ptr08,ptr09,\
+                                     ptr10,ptr11,ptr12,ptr13,ptr14,ptr15,ptr16,ptr17,ptr18,ptr19,\
+                                     ptr20,ptr21,ptr22,ptr23,ptr24,ptr25,ptr26,ptr27,ptr28,ptr29,\
+                                     ptr30,ptr31,ptr32,ptr33,ptr34,ptr35,ptr36,ptr37,ptr38,ptr39,\
+                                     ptr40,ptr41,ptr42,ptr43,ptr44,ptr45,ptr46,ptr47)
+    #pragma acc update self(ptr00[0:nelems],ptr01[0:nelems],ptr02[0:nelems],ptr03[0:nelems],ptr04[0:nelems],ptr05[0:nelems],ptr06[0:nelems],ptr07[0:nelems],ptr08[0:nelems],ptr09[0:nelems],\
+                            ptr10[0:nelems],ptr11[0:nelems],ptr12[0:nelems],ptr13[0:nelems],ptr14[0:nelems],ptr15[0:nelems],ptr16[0:nelems],ptr17[0:nelems],ptr18[0:nelems],ptr19[0:nelems],\
+                            ptr20[0:nelems],ptr21[0:nelems],ptr22[0:nelems],ptr23[0:nelems],ptr24[0:nelems],ptr25[0:nelems],ptr26[0:nelems],ptr27[0:nelems],ptr28[0:nelems],ptr29[0:nelems],\
+                            ptr30[0:nelems],ptr31[0:nelems],ptr32[0:nelems],ptr33[0:nelems],ptr34[0:nelems],ptr35[0:nelems],ptr36[0:nelems],ptr37[0:nelems],ptr38[0:nelems],ptr39[0:nelems],\
+                            ptr40[0:nelems],ptr41[0:nelems],ptr42[0:nelems],ptr43[0:nelems],ptr44[0:nelems],ptr45[0:nelems],ptr46[0:nelems],ptr47[0:nelems])
+    #endif
     {
-        // [RANK-1] <---> [RANK] communication
-        EXCHANGE( &s.tl.zz[left_send], &s.tl.zz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tl.xz[left_send], &s.tl.xz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tl.yz[left_send], &s.tl.yz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tl.xx[left_send], &s.tl.xx[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tl.xy[left_send], &s.tl.xy[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tl.yy[left_send], &s.tl.yy[left_recv], rank-1, rank, nelems );
+        if ( rank != 0 )
+        {
+            // [RANK-1] <---> [RANK] communication
+            EXCHANGE( &s.tl.zz[left_send], &s.tl.zz[left_recv], rank-1, rank, nelems, &requests[ 0] );
+            EXCHANGE( &s.tl.xz[left_send], &s.tl.xz[left_recv], rank-1, rank, nelems, &requests[ 2] );
+            EXCHANGE( &s.tl.yz[left_send], &s.tl.yz[left_recv], rank-1, rank, nelems, &requests[ 4] );
+            EXCHANGE( &s.tl.xx[left_send], &s.tl.xx[left_recv], rank-1, rank, nelems, &requests[ 6] );
+            EXCHANGE( &s.tl.xy[left_send], &s.tl.xy[left_recv], rank-1, rank, nelems, &requests[ 8] );
+            EXCHANGE( &s.tl.yy[left_send], &s.tl.yy[left_recv], rank-1, rank, nelems, &requests[10] );
 
-        EXCHANGE( &s.tr.zz[left_send], &s.tr.zz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tr.xz[left_send], &s.tr.xz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tr.yz[left_send], &s.tr.yz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tr.xx[left_send], &s.tr.xx[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tr.xy[left_send], &s.tr.xy[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.tr.yy[left_send], &s.tr.yy[left_recv], rank-1, rank, nelems );
+            EXCHANGE( &s.tr.zz[left_send], &s.tr.zz[left_recv], rank-1, rank, nelems, &requests[12] );
+            EXCHANGE( &s.tr.xz[left_send], &s.tr.xz[left_recv], rank-1, rank, nelems, &requests[14] );
+            EXCHANGE( &s.tr.yz[left_send], &s.tr.yz[left_recv], rank-1, rank, nelems, &requests[16] );
+            EXCHANGE( &s.tr.xx[left_send], &s.tr.xx[left_recv], rank-1, rank, nelems, &requests[18] );
+            EXCHANGE( &s.tr.xy[left_send], &s.tr.xy[left_recv], rank-1, rank, nelems, &requests[20] );
+            EXCHANGE( &s.tr.yy[left_send], &s.tr.yy[left_recv], rank-1, rank, nelems, &requests[22] );
 
-        EXCHANGE( &s.bl.zz[left_send], &s.bl.zz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.bl.xz[left_send], &s.bl.xz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.bl.yz[left_send], &s.bl.yz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.bl.xx[left_send], &s.bl.xx[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.bl.xy[left_send], &s.bl.xy[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.bl.yy[left_send], &s.bl.yy[left_recv], rank-1, rank, nelems );
+            EXCHANGE( &s.bl.zz[left_send], &s.bl.zz[left_recv], rank-1, rank, nelems, &requests[24] );
+            EXCHANGE( &s.bl.xz[left_send], &s.bl.xz[left_recv], rank-1, rank, nelems, &requests[26] );
+            EXCHANGE( &s.bl.yz[left_send], &s.bl.yz[left_recv], rank-1, rank, nelems, &requests[28] );
+            EXCHANGE( &s.bl.xx[left_send], &s.bl.xx[left_recv], rank-1, rank, nelems, &requests[30] );
+            EXCHANGE( &s.bl.xy[left_send], &s.bl.xy[left_recv], rank-1, rank, nelems, &requests[32] );
+            EXCHANGE( &s.bl.yy[left_send], &s.bl.yy[left_recv], rank-1, rank, nelems, &requests[34] );
 
-        EXCHANGE( &s.br.zz[left_send], &s.br.zz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.br.xz[left_send], &s.br.xz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.br.yz[left_send], &s.br.yz[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.br.xx[left_send], &s.br.xx[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.br.xy[left_send], &s.br.xy[left_recv], rank-1, rank, nelems );
-        EXCHANGE( &s.br.yy[left_send], &s.br.yy[left_recv], rank-1, rank, nelems );
-    }
+            EXCHANGE( &s.br.zz[left_send], &s.br.zz[left_recv], rank-1, rank, nelems, &requests[36] );
+            EXCHANGE( &s.br.xz[left_send], &s.br.xz[left_recv], rank-1, rank, nelems, &requests[38] );
+            EXCHANGE( &s.br.yz[left_send], &s.br.yz[left_recv], rank-1, rank, nelems, &requests[40] );
+            EXCHANGE( &s.br.xx[left_send], &s.br.xx[left_recv], rank-1, rank, nelems, &requests[42] );
+            EXCHANGE( &s.br.xy[left_send], &s.br.xy[left_recv], rank-1, rank, nelems, &requests[44] );
+            EXCHANGE( &s.br.yy[left_send], &s.br.yy[left_recv], rank-1, rank, nelems, &requests[46] );
 
-    if ( rank != nranks-1 )
-    {
-        //                [RANK] <---> [RANK+1] communication
-        EXCHANGE( &s.tl.zz[right_send], &s.tl.zz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tl.xz[right_send], &s.tl.xz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tl.yz[right_send], &s.tl.yz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tl.xx[right_send], &s.tl.xx[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tl.xy[right_send], &s.tl.xy[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tl.yy[right_send], &s.tl.yy[right_recv], rank+1, rank, nelems );
+            wait_total += 48;
+            wait_reqs   = requests;
+            wait_status = statuses;
 
-        EXCHANGE( &s.tr.zz[right_send], &s.tr.zz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tr.xz[right_send], &s.tr.xz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tr.yz[right_send], &s.tr.yz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tr.xx[right_send], &s.tr.xx[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tr.xy[right_send], &s.tr.xy[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.tr.yy[right_send], &s.tr.yy[right_recv], rank+1, rank, nelems );
+        }
 
-        EXCHANGE( &s.bl.zz[right_send], &s.bl.zz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.bl.xz[right_send], &s.bl.xz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.bl.yz[right_send], &s.bl.yz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.bl.xx[right_send], &s.bl.xx[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.bl.xy[right_send], &s.bl.xy[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.bl.yy[right_send], &s.bl.yy[right_recv], rank+1, rank, nelems );
+        if ( rank != nranks-1 )
+        {
+            //                [RANK] <---> [RANK+1] communication
+            EXCHANGE( &s.tl.zz[right_send], &s.tl.zz[right_recv], rank+1, rank, nelems, &requests[48] );
+            EXCHANGE( &s.tl.xz[right_send], &s.tl.xz[right_recv], rank+1, rank, nelems, &requests[50] );
+            EXCHANGE( &s.tl.yz[right_send], &s.tl.yz[right_recv], rank+1, rank, nelems, &requests[52] );
+            EXCHANGE( &s.tl.xx[right_send], &s.tl.xx[right_recv], rank+1, rank, nelems, &requests[54] );
+            EXCHANGE( &s.tl.xy[right_send], &s.tl.xy[right_recv], rank+1, rank, nelems, &requests[56] );
+            EXCHANGE( &s.tl.yy[right_send], &s.tl.yy[right_recv], rank+1, rank, nelems, &requests[58] );
+                                                                                                     
+            EXCHANGE( &s.tr.zz[right_send], &s.tr.zz[right_recv], rank+1, rank, nelems, &requests[60] );
+            EXCHANGE( &s.tr.xz[right_send], &s.tr.xz[right_recv], rank+1, rank, nelems, &requests[62] );
+            EXCHANGE( &s.tr.yz[right_send], &s.tr.yz[right_recv], rank+1, rank, nelems, &requests[64] );
+            EXCHANGE( &s.tr.xx[right_send], &s.tr.xx[right_recv], rank+1, rank, nelems, &requests[66] );
+            EXCHANGE( &s.tr.xy[right_send], &s.tr.xy[right_recv], rank+1, rank, nelems, &requests[68] );
+            EXCHANGE( &s.tr.yy[right_send], &s.tr.yy[right_recv], rank+1, rank, nelems, &requests[70] );
+                                                                                                     
+            EXCHANGE( &s.bl.zz[right_send], &s.bl.zz[right_recv], rank+1, rank, nelems, &requests[72] );
+            EXCHANGE( &s.bl.xz[right_send], &s.bl.xz[right_recv], rank+1, rank, nelems, &requests[74] );
+            EXCHANGE( &s.bl.yz[right_send], &s.bl.yz[right_recv], rank+1, rank, nelems, &requests[76] );
+            EXCHANGE( &s.bl.xx[right_send], &s.bl.xx[right_recv], rank+1, rank, nelems, &requests[78] );
+            EXCHANGE( &s.bl.xy[right_send], &s.bl.xy[right_recv], rank+1, rank, nelems, &requests[80] );
+            EXCHANGE( &s.bl.yy[right_send], &s.bl.yy[right_recv], rank+1, rank, nelems, &requests[82] );
+                                                                                                     
+            EXCHANGE( &s.br.zz[right_send], &s.br.zz[right_recv], rank+1, rank, nelems, &requests[84] );
+            EXCHANGE( &s.br.xz[right_send], &s.br.xz[right_recv], rank+1, rank, nelems, &requests[86] );
+            EXCHANGE( &s.br.yz[right_send], &s.br.yz[right_recv], rank+1, rank, nelems, &requests[88] );
+            EXCHANGE( &s.br.xx[right_send], &s.br.xx[right_recv], rank+1, rank, nelems, &requests[90] );
+            EXCHANGE( &s.br.xy[right_send], &s.br.xy[right_recv], rank+1, rank, nelems, &requests[92] );
+            EXCHANGE( &s.br.yy[right_send], &s.br.yy[right_recv], rank+1, rank, nelems, &requests[94] );
 
-        EXCHANGE( &s.br.zz[right_send], &s.br.zz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.br.xz[right_send], &s.br.xz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.br.yz[right_send], &s.br.yz[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.br.xx[right_send], &s.br.xx[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.br.xy[right_send], &s.br.xy[right_recv], rank+1, rank, nelems );
-        EXCHANGE( &s.br.yy[right_send], &s.br.yy[right_recv], rank+1, rank, nelems );
+            wait_total += 48;
+        }
+
+        MPI_Waitall(wait_total, wait_reqs, wait_status );
     }
 
     POP_RANGE

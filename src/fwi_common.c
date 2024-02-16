@@ -491,7 +491,8 @@ void fwi_writelog(const char *SourceFileName,
     char LogFileName[50];
     sprintf(LogFileName, "fwi.%02d.log", id);
 
-    FILE *fp = safe_fopen ( LogFileName, "a", __FILE__, __LINE__ );
+    /*FILE *fp = safe_fopen ( LogFileName, "a", __FILE__, __LINE__ );*/
+    FILE *fp = stdout;
 
     va_list args;
     va_start(args, fmt);
@@ -500,6 +501,6 @@ void fwi_writelog(const char *SourceFileName,
     fprintf(fp, "\n");
     va_end(args);
 
-    safe_fclose ( LogFileName, fp, __FILE__, __LINE__);
+    /*safe_fclose ( LogFileName, fp, __FILE__, __LINE__);*/
 };
 

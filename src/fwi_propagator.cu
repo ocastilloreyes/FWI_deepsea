@@ -39,6 +39,12 @@
 
 #define FULLMASK 0xffffffff
 
+//#define OPT_Y_BLOCK    1
+#define OPT_SHARED_MEM 1
+#define OPT_REG_TILING 1
+#define OPT_SHUFFLE    1
+
+
 template <typename T>
 __device__ inline
 T fwi_shfl_up(T var, unsigned int delta, int width=warpSize)
@@ -372,15 +378,24 @@ void compute_component_vcell_TL_cuda_k ( float* __restrict__ vptr,
     int z = blockIdx.x * blockDim.x + threadIdx.x + nz0; 
     int x = blockIdx.y * blockDim.y + threadIdx.y + nx0; 
 
-    int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
-    int ystart  = blockIdx.z * nplanes + ny0;
-    int ystop   =     ystart + nplanes;
+#ifdef OPT_Y_BLOCK
+    const int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
+    const int ystart  = blockIdx.z * nplanes + ny0;
+    const int ystop   =     ystart + nplanes;
+#else
+    const int ystart  = ny0;
+    const int ystop   = nyf;
+#endif
 
     // WARNING: We can't predicate threads that fall outside of the [nz0:nzf][nx0:nxf] range because
     //          we use COLLECTIVE operations like SHUFFLE & SHARED.
     //          PREVENT incorrect GMEM memory access by checking boundaries at every access
 
+#ifdef OPT_SHARED_MEM
     __shared__ float sx_smem[NY][NX];
+#endif
+
+#ifdef OPT_REG_TILING
     float sy_front1, sy_front2, sy_front3;
     float sy_back1, sy_back2, sy_back3, sy_back4;
     float sy_current;
@@ -392,14 +407,18 @@ void compute_component_vcell_TL_cuda_k ( float* __restrict__ vptr,
     sy_front1  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+4+SY,dimmz,dimmx)] : 0.0f;
     sy_front2  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+5+SY,dimmz,dimmx)] : 0.0f;
     sy_front3  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+6+SY,dimmz,dimmx)] : 0.0f;
+#endif
 
+#ifdef OPT_REG_TILING
     float rho_current, rho_front1;
     rho_front1 = (z<dimmz && x<dimmx) ? rho[IDX(z,x,ystart,dimmz,dimmx)] : 0.0f;
+#endif
 
     for(int y = ystart;
             y < ystop && y < nyf; 
             y++)
     {
+#ifdef OPT_REG_TILING
         /////////// register tiling-advance plane ////////////////
         sy_back4   = sy_back3;
         sy_back3   = sy_back2;
@@ -410,20 +429,39 @@ void compute_component_vcell_TL_cuda_k ( float* __restrict__ vptr,
         sy_front2  = sy_front3;
         sy_front3  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,y+SY+HALO-1,dimmz,dimmx)] : 0.0f;
         ///////////////////////
+#endif
+#ifdef OPT_REG_TILING
         rho_current = rho_front1;
         rho_front1  = (z<dimmz && x<dimmx) ? rho[IDX(z,x,y+1,dimmz,dimmx)] : 0.0f;
+#endif
         //////////////////////////////////////////////////////////
 
+#ifdef OPT_REG_TILING
         const float lrho = (2.0f / (rho_current + rho_front1));
+#else
+        const float lrho = rho_TL(rho, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_SHUFFLE
         const float stz = stencil_Z_shfl <HALO,BDIMX> (SZ, szptr, dzi, z, x, y, dimmz, dimmx);
-        
-        const float stx = stencil_X_smem <NX,NY,HALO,BDIMY> (SX, sx_smem, sxptr, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float stz  = stencil_Z( SZ, szptr, dzi, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_SHARED_MEM
+        const float stx = stencil_X_smem <NX,NY,HALO,BDIMY> (SX, sx_smem, sxptr, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float stx  = stencil_X( SX, sxptr, dxi, z, x, y, dimmz, dimmx);
+#endif
+
+#ifdef OPT_REG_TILING
         const float sty = ((C0 * ( sy_current - sy_back1 ) +
                             C1 * ( sy_front1  - sy_back2 ) +
                             C2 * ( sy_front2  - sy_back3 ) +
                             C3 * ( sy_front3  - sy_back4 )) * dyi );
+#else
+        const float sty  = stencil_Y( SY, syptr, dyi, z, x, y, dimmz, dimmx);
+#endif
     
         if (z < nzf && x < nxf)
         {
@@ -513,7 +551,9 @@ void compute_component_vcell_TL_cuda ( float* vptr,
     cudaStream_t s = (cudaStream_t) stream;
 
 #ifdef VCELL_TL
+#ifdef OPT_Y_BLOCK
     grid_dim.z = 16;
+#endif
 
     compute_component_vcell_TL_cuda_k<4,block_dim_x,block_dim_y><<<grid_dim, block_dim, 0, s>>>
         (vptr, szptr, sxptr, syptr, rho, dt, dzi, dxi, dyi, 
@@ -559,15 +599,23 @@ void compute_component_vcell_TR_cuda_k ( float* __restrict__ vptr,
     int z = blockIdx.x * blockDim.x + threadIdx.x + nz0; 
     int x = blockIdx.y * blockDim.y + threadIdx.y + nx0; 
 
-    int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
-    int ystart  = blockIdx.z * nplanes + ny0;
-    int ystop   =     ystart + nplanes;
+#ifdef OPT_Y_BLOCK
+    const int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
+    const int ystart  = blockIdx.z * nplanes + ny0;
+    const int ystop   =     ystart + nplanes;
+#else
+    const int ystart  = ny0;
+    const int ystop   = nyf;
+#endif
 
     // WARNING: We can't predicate threads that fall outside of the [nz0:nzf][nx0:nxf] range because
     //          we use COLLECTIVE operations like SHUFFLE & SHARED.
     //          PREVENT incorrect GMEM memory access by checking boundaries at every access
 
+#ifdef OPT_SHARED_MEM
     __shared__ float sx_smem[NY][NX];
+#endif
+#ifdef OPT_REG_TILING
     float sy_front1, sy_front2, sy_front3;
     float sy_back1, sy_back2, sy_back3, sy_back4;
     float sy_current;
@@ -579,13 +627,17 @@ void compute_component_vcell_TR_cuda_k ( float* __restrict__ vptr,
     sy_front1  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+4+SY,dimmz,dimmx)] : 0.0f;
     sy_front2  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+5+SY,dimmz,dimmx)] : 0.0f;
     sy_front3  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+6+SY,dimmz,dimmx)] : 0.0f;
+#endif
 
+#ifdef OPT_SHARED_MEM
     __shared__ float rho_smem[BDIMY+1][BDIMX];
+#endif
 
     for(int y = ystart;
             y < ystop && y < nyf;
             y++)
     {
+#ifdef OPT_REG_TILING
         /////////// register tiling-advance plane ////////////////
         sy_back4   = sy_back3;
         sy_back3   = sy_back2;
@@ -596,17 +648,34 @@ void compute_component_vcell_TR_cuda_k ( float* __restrict__ vptr,
         sy_front2  = sy_front3;
         sy_front3  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,y+SY+HALO-1,dimmz,dimmx)] : 0.0f;
         //////////////////////////////////////////////////////////
+#endif
 
+#ifdef OPT_SHARED_MEM
         const float lrho = rho_TR_smem <BDIMX,BDIMY> (rho_smem, rho, z, x, y, dimmz, dimmx);
+#else
+        const float lrho = rho_TR(rho, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_SHUFFLE
         const float stz = stencil_Z_shfl <HALO,BDIMX> (SZ, szptr, dzi, z, x, y, dimmz, dimmx);
+#else
+        const float stz  = stencil_Z( SZ, szptr, dzi, z, x, y, dimmz, dimmx);
+#endif
         
+#ifdef OPT_SHARED_MEM
         const float stx = stencil_X_smem <NX,NY,HALO,BDIMY> (SX, sx_smem, sxptr, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float stx  = stencil_X( SX, sxptr, dxi, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_REG_TILING
         const float sty = ((C0 * ( sy_current - sy_back1 ) +
                             C1 * ( sy_front1  - sy_back2 ) +
                             C2 * ( sy_front2  - sy_back3 ) +
                             C3 * ( sy_front3  - sy_back4 )) * dyi );
+#else
+        const float sty  = stencil_Y( SY, syptr, dyi, z, x, y, dimmz, dimmx);
+#endif
         
         if (z < nzf && x < nxf)
         {
@@ -696,7 +765,9 @@ void compute_component_vcell_TR_cuda ( float* vptr,
     cudaStream_t s = (cudaStream_t) stream;
 
 #ifdef VCELL_TR
+#ifdef OPT_Y_BLOCK
     grid_dim.z = 16;
+#endif
 
     compute_component_vcell_TR_cuda_k<4,block_dim_x,block_dim_y><<<grid_dim, block_dim, 0, s>>>
         (vptr, szptr, sxptr, syptr, rho, dt, dzi, dxi, dyi, 
@@ -742,11 +813,19 @@ void compute_component_vcell_BR_cuda_k ( float* __restrict__ vptr,
     int z = blockIdx.x * blockDim.x + threadIdx.x + nz0; 
     int x = blockIdx.y * blockDim.y + threadIdx.y + nx0; 
 
-    int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
-    int ystart  = blockIdx.z * nplanes + ny0;
-    int ystop   =     ystart + nplanes;
+#ifdef OPT_Y_BLOCK
+    const int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
+    const int ystart  = blockIdx.z * nplanes + ny0;
+    const int ystop   =     ystart + nplanes;
+#else
+    const int ystart  = ny0;
+    const int ystop   = nyf;
+#endif
 
+#ifdef OPT_SHARED_MEM
     __shared__ float sx_smem[NY][NX];
+#endif
+#ifdef OPT_REG_TILING
     float sy_front1, sy_front2, sy_front3;
     float sy_back1, sy_back2, sy_back3, sy_back4;
     float sy_current;
@@ -758,15 +837,21 @@ void compute_component_vcell_BR_cuda_k ( float* __restrict__ vptr,
     sy_front1  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+4+SY,dimmz,dimmx)] : 0.0f;
     sy_front2  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+5+SY,dimmz,dimmx)] : 0.0f;
     sy_front3  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+6+SY,dimmz,dimmx)] : 0.0f;
+#endif
 
+#ifdef OPT_SHARED_MEM
     __shared__ float rho_smem[BDIMY+1][BDIMX+1];
+#endif
+#ifdef OPT_REG_TILING
     float rho_current, rho_front1;
     rho_front1 = (z<dimmz && x<dimmx) ? rho[IDX(z,x,ystart,dimmz,dimmx)] : 0.0f;
+#endif
 
     for(int y = ystart;
             y < ystop && y < nyf;
             y++)
     {
+#ifdef OPT_REG_TILING
         /////////// register tiling-advance plane ////////////////
         sy_back4   = sy_back3;
         sy_back3   = sy_back2;
@@ -779,18 +864,39 @@ void compute_component_vcell_BR_cuda_k ( float* __restrict__ vptr,
         ///////////////////////
         rho_current = rho_front1;
         rho_front1  = (z<dimmz && x<dimmx) ? rho[IDX(z,x,y+1,dimmz,dimmx)] : 0.0f;
+#endif
         //////////////////////////////////////////////////////////
 
+#if defined( OPT_REG_TILING ) && defined( OPT_SHARED_MEM )
         const float lrho = rho_BR_smem <BDIMX,BDIMY> (rho_smem, rho, rho_current, rho_front1, z, x, y, dimmz, dimmx);
-        
+#elif defined( OPT_SHARED_MEM )
+        const float rho_current = rho[IDX(z,x,y  ,dimmz,dimmx)] ;
+        const float rho_front1  = rho[IDX(z,x,y+1,dimmz,dimmx)];
+        const float lrho = rho_BR_smem <BDIMX,BDIMY> (rho_smem, rho, rho_current, rho_front1, z, x, y, dimmz, dimmx);
+#else
+        const float lrho = rho_BR(rho, z, x, y, dimmz, dimmx);
+#endif
+
+#ifdef OPT_SHUFFLE
         const float stz = stencil_Z_shfl <HALO,BDIMX> (SZ, szptr, dzi, z, x, y, dimmz, dimmx);
+#else
+        const float stz  = stencil_Z( SZ, szptr, dzi, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_SHARED_MEM
         const float stx = stencil_X_smem <NX,NY,HALO,BDIMY> (SX, sx_smem, sxptr, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float stx  = stencil_X( SX, sxptr, dxi, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_REG_TILING
         const float sty = ((C0 * ( sy_current - sy_back1 ) +
                             C1 * ( sy_front1  - sy_back2 ) +
                             C2 * ( sy_front2  - sy_back3 ) +
                             C3 * ( sy_front3  - sy_back4 )) * dyi );
+#else
+        const float sty  = stencil_Y( SY, syptr, dyi, z, x, y, dimmz, dimmx);
+#endif
 
         if (z < nzf && x < nxf)
         {
@@ -880,7 +986,9 @@ void compute_component_vcell_BR_cuda ( float* vptr,
     cudaStream_t s = (cudaStream_t) stream;
 
 #ifdef VCELL_BR
+#ifdef OPT_Y_BLOCK
     grid_dim.z = 16;
+#endif
 
     compute_component_vcell_BR_cuda_k<4,block_dim_x,block_dim_y><<<grid_dim, block_dim, 0, s>>>
         (vptr, szptr, sxptr, syptr, rho, dt, dzi, dxi, dyi, 
@@ -925,27 +1033,38 @@ void compute_component_vcell_BL_cuda_k ( float* __restrict__ vptr,
     int z = blockIdx.x * blockDim.x + threadIdx.x + nz0; 
     int x = blockIdx.y * blockDim.y + threadIdx.y + nx0; 
 
-    int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
-    int ystart  = blockIdx.z * nplanes + ny0;
-    int ystop   =     ystart + nplanes;
+#ifdef OPT_Y_BLOCK
+    const int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
+    const int ystart  = blockIdx.z * nplanes + ny0;
+    const int ystop   =     ystart + nplanes;
+#else
+    const int ystart  = ny0;
+    const int ystop   = nyf;
+#endif
 
+#ifdef OPT_SHARED_MEM
     __shared__ float sx_smem[NY][NX];
+#endif
+#ifdef OPT_REG_TILING
     float sy_front1, sy_front2, sy_front3;
     float sy_back1, sy_back2, sy_back3, sy_back4;
     float sy_current;
-
-    sy_back3   = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+0+SY,dimmz,dimmx)] : 0.0f;
-    sy_back2   = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+1+SY,dimmz,dimmx)] : 0.0f;
-    sy_back1   = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+2+SY,dimmz,dimmx)] : 0.0f;
-    sy_current = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+3+SY,dimmz,dimmx)] : 0.0f;
-    sy_front1  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+4+SY,dimmz,dimmx)] : 0.0f;
-    sy_front2  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+5+SY,dimmz,dimmx)] : 0.0f;
-    sy_front3  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+6+SY,dimmz,dimmx)] : 0.0f;
+    
+    // TODO check why this seg. faults!!!
+    //sy_back3   = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+0+SY,dimmz,dimmx)] : 0.0f;
+    //sy_back2   = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+1+SY,dimmz,dimmx)] : 0.0f;
+    //sy_back1   = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+2+SY,dimmz,dimmx)] : 0.0f;
+    //sy_current = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+3+SY,dimmz,dimmx)] : 0.0f;
+    //sy_front1  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+4+SY,dimmz,dimmx)] : 0.0f;
+    //sy_front2  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+5+SY,dimmz,dimmx)] : 0.0f;
+    //sy_front3  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,ystart-HALO+6+SY,dimmz,dimmx)] : 0.0f;
+#endif
 
     for(int y = ystart;
             y < ystop && y < nyf;
             y++)
     {
+#ifdef OPT_REG_TILING
         /////////// register tiling-advance plane ////////////////
         sy_back4   = sy_back3;
         sy_back3   = sy_back2;
@@ -956,17 +1075,34 @@ void compute_component_vcell_BL_cuda_k ( float* __restrict__ vptr,
         sy_front2  = sy_front3;
         sy_front3  = (z<dimmz && x<dimmx) ? syptr[IDX(z,x,y+SY+HALO-1,dimmz,dimmx)] : 0.0f;
         //////////////////////////////////////////////////////////
+#endif
         
+#ifdef OPT_SHUFFLE
         const float lrho = rho_BL_shfl <BDIMX> (rho, z, x, y, dimmz, dimmx);
+#else
+        const float lrho = rho_BL(rho, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_SHUFFLE
         const float stz = stencil_Z_shfl <HALO,BDIMX> (SZ, szptr, dzi, z, x, y, dimmz, dimmx);
+#else
+        const float stz  = stencil_Z( SZ, szptr, dzi, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_SHARED_MEM
         const float stx = stencil_X_smem <NX,NY,HALO,BDIMY> (SX, sx_smem, sxptr, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float stx  = stencil_X( SX, sxptr, dxi, z, x, y, dimmz, dimmx);
+#endif
 
+#ifdef OPT_REG_TILING
         const float sty = ((C0 * ( sy_current - sy_back1 ) +
                             C1 * ( sy_front1  - sy_back2 ) +
                             C2 * ( sy_front2  - sy_back3 ) +
                             C3 * ( sy_front3  - sy_back4 )) * dyi );
+#else
+        const float sty  = stencil_Y( SY, syptr, dyi, z, x, y, dimmz, dimmx);
+#endif
 
         if (z < nzf && x < nxf)
         {
@@ -1056,7 +1192,9 @@ void compute_component_vcell_BL_cuda ( float* vptr,
     cudaStream_t s = (cudaStream_t) stream;
 
 #ifdef VCELL_BL
+#ifdef OPT_Y_BLOCK
     grid_dim.z = 16;
+#endif
 
     compute_component_vcell_BL_cuda_k<4,block_dim_x,block_dim_y><<<grid_dim, block_dim, 0, s>>>
         (vptr, szptr, sxptr, syptr, rho, dt, dzi, dxi, dyi, 
@@ -1466,11 +1604,18 @@ void compute_component_scell_TR_cuda_k ( float* __restrict__ sxxptr,
     const int z = blockIdx.x * blockDim.x + threadIdx.x + nz0; 
     const int x = blockIdx.y * blockDim.y + threadIdx.y + nx0;       
 
-    int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
-    int ystart  = blockIdx.z * nplanes + ny0;
-    int ystop   =     ystart + nplanes;
+#ifdef OPT_Y_BLOCK
+    const int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
+    const int ystart  = blockIdx.z * nplanes + ny0;
+    const int ystop   =     ystart + nplanes;
+#else
+    const int ystart  = ny0;
+    const int ystop   = nyf;
+#endif
 
+#ifdef OPT_SHARED_MEM
     __shared__ float bsmem[NY][NX];
+#endif
 
     for(int y = ystart; 
             y < ystop && y < nyf; 
@@ -1483,8 +1628,9 @@ void compute_component_scell_TR_cuda_k ( float* __restrict__ sxxptr,
         float c55, c56;
         float c66;
 
-        if (z < dimmz && x < dimmx)
-        {
+//        if (z < dimmz && x < dimmx)
+//        {
+#ifdef OPT_SHARED_MEM
             c11 = cell_coeff_TR_smem      <NX,NY,BDIMY>(bsmem, cc11, z, x, y, dimmz, dimmx);
             c12 = cell_coeff_TR_smem      <NX,NY,BDIMY>(bsmem, cc12, z, x, y, dimmz, dimmx);
             c13 = cell_coeff_TR_smem      <NX,NY,BDIMY>(bsmem, cc13, z, x, y, dimmz, dimmx);
@@ -1506,11 +1652,42 @@ void compute_component_scell_TR_cuda_k ( float* __restrict__ sxxptr,
             c55 = cell_coeff_TR_smem      <NX,NY,BDIMY>(bsmem, cc55, z, x, y, dimmz, dimmx);
             c56 = cell_coeff_ARTM_TR_smem <NX,NY,BDIMY>(bsmem, cc56, z, x, y, dimmz, dimmx);
             c66 = cell_coeff_TR_smem      <NX,NY,BDIMY>(bsmem, cc66, z, x, y, dimmz, dimmx);
-        }
+#else
+            c11 = cell_coeff_TR      (cc11, z, x, y, dimmz, dimmx);
+            c12 = cell_coeff_TR      (cc12, z, x, y, dimmz, dimmx);
+            c13 = cell_coeff_TR      (cc13, z, x, y, dimmz, dimmx);
+            c14 = cell_coeff_ARTM_TR (cc14, z, x, y, dimmz, dimmx);
+            c15 = cell_coeff_ARTM_TR (cc15, z, x, y, dimmz, dimmx);
+            c16 = cell_coeff_ARTM_TR (cc16, z, x, y, dimmz, dimmx);
+            c22 = cell_coeff_TR      (cc22, z, x, y, dimmz, dimmx);
+            c23 = cell_coeff_TR      (cc23, z, x, y, dimmz, dimmx);
+            c24 = cell_coeff_ARTM_TR (cc24, z, x, y, dimmz, dimmx);
+            c25 = cell_coeff_ARTM_TR (cc25, z, x, y, dimmz, dimmx);
+            c26 = cell_coeff_ARTM_TR (cc26, z, x, y, dimmz, dimmx);
+            c33 = cell_coeff_TR      (cc33, z, x, y, dimmz, dimmx);
+            c34 = cell_coeff_ARTM_TR (cc34, z, x, y, dimmz, dimmx);
+            c35 = cell_coeff_ARTM_TR (cc35, z, x, y, dimmz, dimmx);
+            c36 = cell_coeff_ARTM_TR (cc36, z, x, y, dimmz, dimmx);
+            c44 = cell_coeff_TR      (cc44, z, x, y, dimmz, dimmx);
+            c45 = cell_coeff_ARTM_TR (cc45, z, x, y, dimmz, dimmx);
+            c46 = cell_coeff_ARTM_TR (cc46, z, x, y, dimmz, dimmx);
+            c55 = cell_coeff_TR      (cc55, z, x, y, dimmz, dimmx);
+            c56 = cell_coeff_ARTM_TR (cc56, z, x, y, dimmz, dimmx);
+            c66 = cell_coeff_TR      (cc66, z, x, y, dimmz, dimmx);
+#endif
+//       }
 
+
+
+#ifdef OPT_SHARED_MEM
         const float u_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxu, dxi, z, x, y, dimmz, dimmx);
         const float v_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxv, dxi, z, x, y, dimmz, dimmx);
         const float w_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxw, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float u_x = stencil_X (SX, vxu, dxi, z, x, y, dimmz, dimmx);
+        const float v_x = stencil_X (SX, vxv, dxi, z, x, y, dimmz, dimmx);
+        const float w_x = stencil_X (SX, vxw, dxi, z, x, y, dimmz, dimmx);
+#endif
         
         float u_y, v_y, w_y;
         if (z < nzf && x < nxf)
@@ -1520,9 +1697,15 @@ void compute_component_scell_TR_cuda_k ( float* __restrict__ sxxptr,
             w_y = stencil_Y (SY, vyw, dyi, z, x, y, dimmz, dimmx);
         }
         
-        const float u_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzu, dzi, z, x, y, dimmz, dimmx);
-        const float v_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzv, dzi, z, x, y, dimmz, dimmx);
-        const float w_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#ifdef OPT_SHUFFLE
+       const float u_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzu, dzi, z, x, y, dimmz, dimmx);
+       const float v_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzv, dzi, z, x, y, dimmz, dimmx);
+       const float w_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#else
+       const float u_z = stencil_Z (SZ, vzu, dzi, z, x, y, dimmz, dimmx);
+       const float v_z = stencil_Z (SZ, vzv, dzi, z, x, y, dimmz, dimmx);
+       const float w_z = stencil_Z (SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#endif
         
         if (z < nzf && x < nxf)
         {
@@ -1598,6 +1781,15 @@ void compute_component_scell_TR_cuda_k ( float* __restrict__ sxxptr,
                 x < nxf; 
                 x += gridDim.y * blockDim.y)
         {
+
+            int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
+            int ystart  = blockIdx.z * nplanes + ny0;
+            int ystop   =     ystart + nplanes;
+
+            //for(int y = ystart; 
+            //        y < ystop && y < nyf; 
+            //        y++)
+
             for(int y = ny0; 
                     y < nyf; 
                     y++)
@@ -1712,8 +1904,11 @@ void compute_component_scell_TR_cuda ( float* sxxptr,
     cudaStream_t s = (cudaStream_t) stream;
 
 #ifdef SCELL_TR
-    const int HALO = 4;
+#ifdef OPT_Y_BLOCK
     grid_dim.z = 16;
+#endif
+
+    const int HALO = 4;
 
     compute_component_scell_TR_cuda_k<HALO,block_dim_x,block_dim_y><<<grid_dim, block_dim, 0, s>>>
         (sxxptr, syyptr, szzptr, syzptr, sxzptr, sxyptr,
@@ -1803,11 +1998,17 @@ void compute_component_scell_TL_cuda_k ( float* __restrict__ sxxptr,
     const int z = blockIdx.x * blockDim.x + threadIdx.x + nz0; 
     const int x = blockIdx.y * blockDim.y + threadIdx.y + nx0;       
 
+#ifdef OPT_Y_BLOCK
     const int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
     const int ystart  = blockIdx.z * nplanes + ny0;
     const int ystop   =     ystart + nplanes;
-
+#else
+    const int ystart  = ny0;
+    const int ystop   = nyf;
+#endif
+#ifdef OPT_SHARED_MEM
     __shared__ float bsmem[NY][NX];
+#endif
 
     for(int y = ystart;
             y < ystop && y < nyf; 
@@ -1820,8 +2021,8 @@ void compute_component_scell_TL_cuda_k ( float* __restrict__ sxxptr,
         float c55, c56;
         float c66;
 
-        if (z < dimmz && x < dimmx)
-        {
+//        if (z < dimmz && x < dimmx)
+//        {
             c11 = cell_coeff_TL      (cc11, z, x, y, dimmz, dimmx);
             c12 = cell_coeff_TL      (cc12, z, x, y, dimmz, dimmx);
             c13 = cell_coeff_TL      (cc13, z, x, y, dimmz, dimmx);
@@ -1843,11 +2044,17 @@ void compute_component_scell_TL_cuda_k ( float* __restrict__ sxxptr,
             c55 = cell_coeff_TL      (cc55, z, x, y, dimmz, dimmx);
             c56 = cell_coeff_ARTM_TL (cc56, z, x, y, dimmz, dimmx);
             c66 = cell_coeff_TL      (cc66, z, x, y, dimmz, dimmx);
-        }
+//        }
 
+#ifdef OPT_SHARED_MEM
         const float u_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxu, dxi, z, x, y, dimmz, dimmx);
         const float v_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxv, dxi, z, x, y, dimmz, dimmx);
         const float w_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxw, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float u_x = stencil_X (SX, vxu, dxi, z, x, y, dimmz, dimmx);
+        const float v_x = stencil_X (SX, vxv, dxi, z, x, y, dimmz, dimmx);
+        const float w_x = stencil_X (SX, vxw, dxi, z, x, y, dimmz, dimmx);
+#endif
         
         float u_y, v_y, w_y;
         if (z < nzf && x < nxf)
@@ -1857,9 +2064,15 @@ void compute_component_scell_TL_cuda_k ( float* __restrict__ sxxptr,
             w_y = stencil_Y (SY, vyw, dyi, z, x, y, dimmz, dimmx);
         }
         
+#ifdef OPT_SHUFFLE
         const float u_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzu, dzi, z, x, y, dimmz, dimmx);
         const float v_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzv, dzi, z, x, y, dimmz, dimmx);
         const float w_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#else
+        const float u_z = stencil_Z (SZ, vzu, dzi, z, x, y, dimmz, dimmx);
+        const float v_z = stencil_Z (SZ, vzv, dzi, z, x, y, dimmz, dimmx);
+        const float w_z = stencil_Z (SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#endif
         
         if (z < nzf && x < nxf)
         {
@@ -2050,7 +2263,9 @@ void compute_component_scell_TL_cuda ( float* sxxptr,
 
 #ifdef SCELL_TL
     const int HALO = 4;
+#ifdef OPT_Y_BLOCK
     grid_dim.z = 16;
+#endif
 
     compute_component_scell_TL_cuda_k<HALO,block_dim_x,block_dim_y><<<grid_dim, block_dim, 0, s>>>
         (sxxptr, syyptr, szzptr, syzptr, sxzptr, sxyptr,
@@ -2140,11 +2355,18 @@ void compute_component_scell_BR_cuda_k ( float* __restrict__ sxxptr,
     const int z = blockIdx.x * blockDim.x + threadIdx.x + nz0; 
     const int x = blockIdx.y * blockDim.y + threadIdx.y + nx0;       
 
+#ifdef OPT_Y_BLOCK
     const int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
     const int ystart  = blockIdx.z * nplanes + ny0;
     const int ystop   =     ystart + nplanes;
+#else
+    const int ystart  = ny0;
+    const int ystop   = nyf;
+#endif
 
+#ifdef OPT_SHARED_MEM
     __shared__ float bsmem[NY][NX];
+#endif
 
     for(int y = ystart;
             y < ystop && y < nyf; 
@@ -2157,8 +2379,9 @@ void compute_component_scell_BR_cuda_k ( float* __restrict__ sxxptr,
         float c55, c56;
         float c66;
 
-        if (z < dimmz && x < dimmx)
-        {
+#ifdef OPT_SHARED_MEM
+//        if (z < dimmz && x < dimmx)
+//        {
             c11 = cell_coeff_BR_smem      <NX,NY,BDIMX,BDIMY>(bsmem, cc11, z, x, y, dimmz, dimmx);
             c12 = cell_coeff_BR_smem      <NX,NY,BDIMX,BDIMY>(bsmem, cc12, z, x, y, dimmz, dimmx);
             c13 = cell_coeff_BR_smem      <NX,NY,BDIMX,BDIMY>(bsmem, cc13, z, x, y, dimmz, dimmx);
@@ -2180,11 +2403,40 @@ void compute_component_scell_BR_cuda_k ( float* __restrict__ sxxptr,
             c55 = cell_coeff_BR_smem      <NX,NY,BDIMX,BDIMY>(bsmem, cc55, z, x, y, dimmz, dimmx);
             c56 = cell_coeff_ARTM_BR_smem <NX,NY,BDIMX,BDIMY>(bsmem, cc56, z, x, y, dimmz, dimmx);
             c66 = cell_coeff_BR_smem      <NX,NY,BDIMX,BDIMY>(bsmem, cc66, z, x, y, dimmz, dimmx);
-        }
+#else
+            c11 = cell_coeff_BR      (cc11, z, x, y, dimmz, dimmx);
+            c12 = cell_coeff_BR      (cc12, z, x, y, dimmz, dimmx);
+            c13 = cell_coeff_BR      (cc13, z, x, y, dimmz, dimmx);
+            c14 = cell_coeff_ARTM_BR (cc14, z, x, y, dimmz, dimmx);
+            c15 = cell_coeff_ARTM_BR (cc15, z, x, y, dimmz, dimmx);
+            c16 = cell_coeff_ARTM_BR (cc16, z, x, y, dimmz, dimmx);
+            c22 = cell_coeff_BR      (cc22, z, x, y, dimmz, dimmx);
+            c23 = cell_coeff_BR      (cc23, z, x, y, dimmz, dimmx);
+            c24 = cell_coeff_ARTM_BR (cc24, z, x, y, dimmz, dimmx);
+            c25 = cell_coeff_ARTM_BR (cc25, z, x, y, dimmz, dimmx);
+            c26 = cell_coeff_ARTM_BR (cc26, z, x, y, dimmz, dimmx);
+            c33 = cell_coeff_BR      (cc33, z, x, y, dimmz, dimmx);
+            c34 = cell_coeff_ARTM_BR (cc34, z, x, y, dimmz, dimmx);
+            c35 = cell_coeff_ARTM_BR (cc35, z, x, y, dimmz, dimmx);
+            c36 = cell_coeff_ARTM_BR (cc36, z, x, y, dimmz, dimmx);
+            c44 = cell_coeff_BR      (cc44, z, x, y, dimmz, dimmx);
+            c45 = cell_coeff_ARTM_BR (cc45, z, x, y, dimmz, dimmx);
+            c46 = cell_coeff_ARTM_BR (cc46, z, x, y, dimmz, dimmx);
+            c55 = cell_coeff_BR      (cc55, z, x, y, dimmz, dimmx);
+            c56 = cell_coeff_ARTM_BR (cc56, z, x, y, dimmz, dimmx);
+            c66 = cell_coeff_BR      (cc66, z, x, y, dimmz, dimmx);
+#endif
+//        }
 
+#ifdef OPT_SHARED_MEM
         const float u_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxu, dxi, z, x, y, dimmz, dimmx);
         const float v_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxv, dxi, z, x, y, dimmz, dimmx);
         const float w_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxw, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float u_x = stencil_X (SX, vxu, dxi, z, x, y, dimmz, dimmx);
+        const float v_x = stencil_X (SX, vxv, dxi, z, x, y, dimmz, dimmx);
+        const float w_x = stencil_X (SX, vxw, dxi, z, x, y, dimmz, dimmx);
+#endif
         
         float u_y, v_y, w_y;
         if (z < nzf && x < nxf)
@@ -2194,9 +2446,15 @@ void compute_component_scell_BR_cuda_k ( float* __restrict__ sxxptr,
             w_y = stencil_Y (SY, vyw, dyi, z, x, y, dimmz, dimmx);
         }
 
+#ifdef OPT_SHUFFLE
         const float u_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzu, dzi, z, x, y, dimmz, dimmx);
         const float v_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzv, dzi, z, x, y, dimmz, dimmx);
         const float w_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#else
+        const float u_z = stencil_Z (SZ, vzu, dzi, z, x, y, dimmz, dimmx);
+        const float v_z = stencil_Z (SZ, vzv, dzi, z, x, y, dimmz, dimmx);
+        const float w_z = stencil_Z (SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#endif
         
         if (z < nzf && x < nxf)
         {
@@ -2387,7 +2645,9 @@ void compute_component_scell_BR_cuda ( float* sxxptr,
 
 #ifdef SCELL_BR
     const int HALO = 4;
+#ifdef OPT_Y_BLOCK
     grid_dim.z = 16;
+#endif
 
     compute_component_scell_BR_cuda_k<HALO,block_dim_x,block_dim_y><<<grid_dim, block_dim, 0, s>>>
         (sxxptr, syyptr, szzptr, syzptr, sxzptr, sxyptr,
@@ -2478,11 +2738,18 @@ void compute_component_scell_BL_cuda_k ( float* __restrict__ sxxptr,
     const int z = blockIdx.x * blockDim.x + threadIdx.x + nz0; 
     const int x = blockIdx.y * blockDim.y + threadIdx.y + nx0;       
 
+#ifdef OPT_Y_BLOCK
     const int nplanes = (nyf - ny0 + gridDim.z - 1)/gridDim.z;
     const int ystart  = blockIdx.z * nplanes + ny0;
     const int ystop   =     ystart + nplanes;
+#else
+    const int ystart  = ny0;
+    const int ystop   = nyf;
+#endif
 
+#ifdef OPT_SHARED_MEM
     __shared__ float bsmem[NY][NX];
+#endif
 
     for(int y = ystart; 
             y < ystop && y < nyf; 
@@ -2495,8 +2762,9 @@ void compute_component_scell_BL_cuda_k ( float* __restrict__ sxxptr,
         float c55, c56;
         float c66;
 
-        if (z < dimmz && x < dimmx)
-        {
+//        if (z < dimmz && x < dimmx)
+//        {
+#ifdef OPT_SHUFFLE
             c11 = cell_coeff_BL_shfl      <BDIMX>(cc11, z, x, y, dimmz, dimmx);
             c12 = cell_coeff_BL_shfl      <BDIMX>(cc12, z, x, y, dimmz, dimmx);
             c13 = cell_coeff_BL_shfl      <BDIMX>(cc13, z, x, y, dimmz, dimmx);
@@ -2518,11 +2786,40 @@ void compute_component_scell_BL_cuda_k ( float* __restrict__ sxxptr,
             c55 = cell_coeff_BL_shfl      <BDIMX>(cc55, z, x, y, dimmz, dimmx);
             c56 = cell_coeff_ARTM_BL_shfl <BDIMX>(cc56, z, x, y, dimmz, dimmx);
             c66 = cell_coeff_BL_shfl      <BDIMX>(cc66, z, x, y, dimmz, dimmx);
-        }
+#else
+            c11 = cell_coeff_BL      (cc11, z, x, y, dimmz, dimmx);
+            c12 = cell_coeff_BL      (cc12, z, x, y, dimmz, dimmx);
+            c13 = cell_coeff_BL      (cc13, z, x, y, dimmz, dimmx);
+            c14 = cell_coeff_ARTM_BL (cc14, z, x, y, dimmz, dimmx);
+            c15 = cell_coeff_ARTM_BL (cc15, z, x, y, dimmz, dimmx);
+            c16 = cell_coeff_ARTM_BL (cc16, z, x, y, dimmz, dimmx);
+            c22 = cell_coeff_BL      (cc22, z, x, y, dimmz, dimmx);
+            c23 = cell_coeff_BL      (cc23, z, x, y, dimmz, dimmx);
+            c24 = cell_coeff_ARTM_BL (cc24, z, x, y, dimmz, dimmx);
+            c25 = cell_coeff_ARTM_BL (cc25, z, x, y, dimmz, dimmx);
+            c26 = cell_coeff_ARTM_BL (cc26, z, x, y, dimmz, dimmx);
+            c33 = cell_coeff_BL      (cc33, z, x, y, dimmz, dimmx);
+            c34 = cell_coeff_ARTM_BL (cc34, z, x, y, dimmz, dimmx);
+            c35 = cell_coeff_ARTM_BL (cc35, z, x, y, dimmz, dimmx);
+            c36 = cell_coeff_ARTM_BL (cc36, z, x, y, dimmz, dimmx);
+            c44 = cell_coeff_BL      (cc44, z, x, y, dimmz, dimmx);
+            c45 = cell_coeff_ARTM_BL (cc45, z, x, y, dimmz, dimmx);
+            c46 = cell_coeff_ARTM_BL (cc46, z, x, y, dimmz, dimmx);
+            c55 = cell_coeff_BL      (cc55, z, x, y, dimmz, dimmx);
+            c56 = cell_coeff_ARTM_BL (cc56, z, x, y, dimmz, dimmx);
+            c66 = cell_coeff_BL      (cc66, z, x, y, dimmz, dimmx);
+#endif
+//        }
 
+#ifdef OPT_SHARED_MEM
         const float u_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxu, dxi, z, x, y, dimmz, dimmx);
         const float v_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxv, dxi, z, x, y, dimmz, dimmx);
         const float w_x = stencil_X_smem <NX,NY,HALO,BDIMY>(SX, bsmem, vxw, dxi, z, x, y, dimmz, dimmx);
+#else
+        const float u_x = stencil_X (SX, vxu, dxi, z, x, y, dimmz, dimmx);
+        const float v_x = stencil_X (SX, vxv, dxi, z, x, y, dimmz, dimmx);
+        const float w_x = stencil_X (SX, vxw, dxi, z, x, y, dimmz, dimmx);
+#endif
         
         float u_y, v_y, w_y;
         if (z < nzf && x < nxf)
@@ -2532,9 +2829,15 @@ void compute_component_scell_BL_cuda_k ( float* __restrict__ sxxptr,
             w_y = stencil_Y (SY, vyw, dyi, z, x, y, dimmz, dimmx);
         }
         
+#ifdef OPT_SHUFFLE
         const float u_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzu, dzi, z, x, y, dimmz, dimmx);
         const float v_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzv, dzi, z, x, y, dimmz, dimmx);
         const float w_z = stencil_Z_shfl <HALO,BDIMX>(SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#else
+        const float u_z = stencil_Z (SZ, vzu, dzi, z, x, y, dimmz, dimmx);
+        const float v_z = stencil_Z (SZ, vzv, dzi, z, x, y, dimmz, dimmx);
+        const float w_z = stencil_Z (SZ, vzw, dzi, z, x, y, dimmz, dimmx);
+#endif
         
         if (z < nzf && x < nxf)
         {
@@ -2725,7 +3028,9 @@ void compute_component_scell_BL_cuda ( float* sxxptr,
 
 #ifdef SCELL_BL
     const int HALO = 4;
+#ifdef OPT_Y_BLOCK
     grid_dim.z = 16;
+#endif
 
     compute_component_scell_BL_cuda_k<HALO,block_dim_x,block_dim_y><<<grid_dim, block_dim, 0, s>>>
         (sxxptr, syyptr, szzptr, syzptr, sxzptr, sxyptr,

@@ -7,6 +7,15 @@ add_library(fwi-core STATIC
     fwi_propagator.c
 )
 
+if( USE_EXTRAE )
+    add_definitions(-DHAVE_EXTRAE)
+    include_directories($HEADER_EXTRAE)
+    target_link_libraries(fwi-core
+        ${LIBEXTRAE}
+    )
+endif(USE_EXTRAE)
+
+
 if (USE_MPI)
     set_target_properties(fwi-core PROPERTIES
         COMPILE_FLAGS "${MPI_C_COMPILE_FLAGS}"

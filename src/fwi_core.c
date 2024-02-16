@@ -29,6 +29,9 @@
 
 #include "fwi/fwi_core.h"
 #include "fwi/fwi_sched.h"
+//CAFE
+#include <math.h>
+//CAFE
 
 /*
  * In order to generate a source for injection,
@@ -37,6 +40,9 @@
  */
 void kernel( propagator_t propagator, real waveletFreq, int shotid, char* outputfolder, char* shotfolder)
 {
+    /*int a = 1;*/
+    /*while( a ) {}*/
+
 #if defined(USE_MPI)
     /* find ourselves into the MPI space */
     int mpi_rank, mpi_size;
@@ -56,6 +62,15 @@ void kernel( propagator_t propagator, real waveletFreq, int shotid, char* output
             &MaxYPlanesPerWorker,
             outputfolder, waveletFreq );
 
+    // CAFE
+    //printf(" stacki = %d\n", stacki);
+    //printf(" forw_steps = %d\n", forw_steps);
+    //printf(" back_steps = %d\n", back_steps);
+    int mem_fly;
+    mem_fly=(int)ceil((double)forw_steps/(double)stacki);
+    //printf(" ceil(forw_steps/stacki) = %d\n", mem_fly);
+    // CAFE
+    
 #if defined(USE_MPI)
     /* aux variables, just to make it more readable */
     const int FIRSTRANK = 0;
@@ -65,7 +80,8 @@ void kernel( propagator_t propagator, real waveletFreq, int shotid, char* output
      * velocity model. These are not the limits for the wave propagator! (they are local,
      * i.e. starts at zero!) */
     const integer y0 = (mpi_rank == FIRSTRANK) ? 0     : (MaxYPlanesPerWorker * mpi_rank) - HALO;
-    const integer yf = (mpi_rank == LASTRANK ) ? dimmy : y0 + MaxYPlanesPerWorker;
+    /*const integer yf = (mpi_rank == LASTRANK ) ? dimmy : y0 + MaxYPlanesPerWorker;*/
+    const integer yf = y0 + MaxYPlanesPerWorker;
     const integer edimmy = (yf - y0);
 #else
     const integer y0 = 0;
@@ -81,8 +97,16 @@ void kernel( propagator_t propagator, real waveletFreq, int shotid, char* output
     const integer nzf = dimmz;
     const integer nxf = dimmx;
     const integer nyf = edimmy;
-    const integer numberOfCells = dimmz * dimmx * edimmy;
-
+    const size_t numberOfCells = (size_t)dimmz * dimmx * edimmy;
+    
+    //    CAFE  Allocate dyn mem using an array of pointers 
+//    real array_mallocs[mem_fly][sizeof(real)*numberOfCells*12];
+    real** array_mallocs = __malloc( ALIGN_REAL, mem_fly * sizeof(real*));
+    //  dyn allocate memory for every row or stacki
+    for (int i_mem = 0; i_mem < mem_fly; i_mem++)
+       *(array_mallocs+i_mem) = __malloc( ALIGN_REAL, sizeof(real) * numberOfCells * WRITTEN_FIELDS);
+    //    CAFE
+    
     real    *rho;
     v_t     v;
     s_t     s;
@@ -100,7 +124,7 @@ void kernel( propagator_t propagator, real waveletFreq, int shotid, char* output
     real* io_buffer = (real*) __malloc( ALIGN_REAL, numberOfCells * sizeof(real) * WRITTEN_FIELDS );
 
     /* inspects every array positions for leaks. Enabled when DEBUG flag is defined */
-    check_memory_shot  ( dimmz, dimmx, (nyf - ny0), &coeffs, &s, &v, rho);
+    /*check_memory_shot  ( dimmz, dimmx, (nyf - ny0), &coeffs, &s, &v, rho);*/
 
     /* Perform forward, backward or test propagations */
     switch( propagator )
@@ -117,7 +141,8 @@ void kernel( propagator_t propagator, real waveletFreq, int shotid, char* output
                          stacki,
                          shotfolder,
                          io_buffer,
-                         dimmz, dimmx, (nyf - ny0));
+                         dimmz, dimmx, (nyf - ny0),
+			 array_mallocs);
 
         end_t = dtime();
 
@@ -133,7 +158,8 @@ void kernel( propagator_t propagator, real waveletFreq, int shotid, char* output
                          stacki,
                          shotfolder,
                          io_buffer,
-                         dimmz, dimmx, (nyf - ny0));
+                         dimmz, dimmx, (nyf - ny0),
+			 array_mallocs);
 
         end_t = dtime();
 
@@ -181,7 +207,8 @@ void kernel( propagator_t propagator, real waveletFreq, int shotid, char* output
                          stacki,
                          shotfolder,
                          io_buffer,
-                         dimmz, dimmx, dimmy);
+                         dimmz, dimmx, dimmy,
+			 array_mallocs);
 
         end_t = dtime();
 
@@ -324,7 +351,6 @@ int execute_simulation( int argc, char* argv[] )
             mpi_rank, acc_get_device_num(acc_device_default), acc_get_num_devices(acc_device_default));
 #endif /*_OPENACC*/
 
-
     /* Load parameters from schedule file */
     schedule_t s = load_schedule(argv[1]);
 
@@ -347,7 +373,7 @@ int execute_simulation( int argc, char* argv[] )
 
         print_info("\n------ Computing %d-th frequency (%.2fHz). ------\n", i, waveletFreq);
 
-        const integer numberOfCells = dimmz * dimmx * dimmx;
+        const size_t numberOfCells = (size_t)dimmz * dimmx * dimmx;
         const size_t VolumeMemory  = numberOfCells * sizeof(real) * 58;
 
         print_stats("Local domain size for freq %f [%d][%d][%d] is %lu bytes (%lf GB)", 
@@ -381,12 +407,23 @@ int execute_simulation( int argc, char* argv[] )
                 kernel( RTM_KERNEL, waveletFreq, shot, s.outputfolder, shotfolder);
 
                 print_info("\tGradient loop processed for %d-th shot", shot);
+
+                //update_shot()
             }
 
-#if defined(USE_MPI)
-           MPI_Barrier( MPI_COMM_WORLD );
-#endif
+//#if defined(USE_MPI)
+//           MPI_Barrier( MPI_COMM_WORLD );
+//
+//           if ( mpi_rank == 0 ) { 
+//               gather_shots( outputfolder, waveletFreq, nshots, numberOfCells );    
+//           }
+//
+//           MPI_Barrier( MPI_COMM_WORLD );
+//#else
+//           gather_shots( s.outputfolder, waveletFreq, s.nshots, numberOfCells );
+//#endif
 
+#if 0
             for(int test=0; test<s.ntests; test++)
             {
                 print_info("\tProcessing %d-th test iteration", test);
@@ -417,6 +454,7 @@ int execute_simulation( int argc, char* argv[] )
                     print_info("\t\tTest loop processed for the %d-th shot", shot);
                 }
             } /* end of test loop */
+#endif
         } /* end of gradient loop */
     } /* end of frequency loop */
 
